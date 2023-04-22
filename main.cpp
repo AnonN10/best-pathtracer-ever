@@ -7,8 +7,6 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/ext/matrix_projection.hpp>
 
-//#define FLT_MAX 3.402823466e+38
-
 glm::vec2 raySphere(glm::vec3 rayOrigin, glm::vec3 rayDir, glm::vec3 sphereCentre, float sphereRadius) {
     glm::vec3 offset = rayOrigin - sphereCentre;
     float a = 1.0; // Set to dot(rayDir, rayDir) if rayDir might be not normalized
@@ -73,7 +71,9 @@ int main(int argc, char ** argv)
 	SDL_Renderer * renderer = SDL_CreateRenderer(window, -1, 0);
 	SDL_Texture * texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, win_width, win_height);
 	
-	SDL_PixelFormat* pxfmt = SDL_AllocFormat(SDL_PIXELFORMAT_ARGB8888);
+	SDL_PixelFormat* pxfmt = SDL_AllocFormat(SDL_PIXELFORMAT_ARGB8888);	
+	
+	glm::vec4* color_buffer = new glm::vec4[win_width * win_height];
 	
 	Uint32 * pixels = new Uint32[win_width * win_height];
 	memset(pixels, 255, win_width * win_height * sizeof(Uint32));
@@ -86,7 +86,7 @@ int main(int argc, char ** argv)
 		SDL_UpdateTexture(texture, NULL, pixels, win_width * sizeof(Uint32));
         SDL_PollEvent(&event);
 		
-		static glm::vec3 translation = glm::vec3(0);
+		static glm::vec3 translation = glm::vec3(0, 0, 3);
  
         switch (event.type)
         {
@@ -120,19 +120,39 @@ int main(int argc, char ** argv)
 		{
 			for(int x = 0; x < win_width; ++x)
 			{
-				glm::vec2 ndc_xy = glm::vec2(float(x)/float(win_width)*2.0-1.0, -(float(y)/float(win_height)*2.0-1.0));
+				glm::vec4 color = glm::vec4(0, 0, 0, 1);
+				
+				glm::vec2 ndc_xy = glm::vec2(float(x)/float(win_width)*2.0-1.0, -(float(y)/float(win_height)*2.0-1.0));				
 				glm::vec3 ray_orig = UnprojectNDC(glm::vec3(ndc_xy, 0.0f), invviewproj);
 				glm::vec3 ray_dir = UnprojectNDC(glm::vec3(ndc_xy, 1.0f), invviewproj);
 				ray_dir = glm::normalize(ray_dir - ray_orig);
-				uint8_t c = 0;
-				glm::vec2 rt_result = raySphere(ray_orig, ray_dir, glm::vec3(0.0, 0.0, 0.0), 1.0f);
-				if(rt_result.x >= 0.0)
+				
 				//glm::vec3 rt_result = rayTriangle(ray_orig, ray_dir, glm::vec3(1, 0, 0), glm::vec3(-1, 0, 0), glm::vec3(0, 1, 0), 0.0, FLT_MAX);
 				//if(rt_result.x != FLT_MAX)
+				glm::vec3 sphere_orig = glm::vec3(0.0, 0.0, 0.0);
+				glm::vec2 rt_result = raySphere(ray_orig, ray_dir, sphere_orig, 1.0f);
+				if(rt_result.x >= 0.0)
 				{
-					c = 255;
+					glm::vec3 normal = glm::normalize(ray_orig + ray_dir*rt_result.x - sphere_orig);
+					color = glm::vec4((glm::vec3(normal.x, normal.y, normal.z)+1.0f)*0.5f, 1.0);
 				}
-				pixels[x+win_width*y] = SDL_MapRGBA(pxfmt, c, c, c, 255);
+				color_buffer[x+win_width*y] = color;
+			}
+		}
+		
+		for(int y = 0; y < win_height; ++y)
+		{
+			for(int x = 0; x < win_width; ++x)
+			{
+				int i = x+win_width*y;
+				Uint32 pixel = SDL_MapRGBA(
+					pxfmt,
+					glm::clamp(color_buffer[i].r, 0.0f, 1.0f)*255,
+					glm::clamp(color_buffer[i].g, 0.0f, 1.0f)*255,
+					glm::clamp(color_buffer[i].b, 0.0f, 1.0f)*255,
+					255
+				);
+				pixels[i] = pixel;
 			}
 		}
 		
