@@ -1,0 +1,9 @@
+[submodule "contrib/SDL"]
+	path = contrib/SDL
+	url = https://github.com/libsdl-org/SDL
+[submodule "contrib/bvh"]
+	path = contrib/bvh
+	url = https://github.com/madmann91/bvh
+[submodule "contrib/glm"]
+	path = contrib/glm
+	url = https://github.com/AnonN10/glm
