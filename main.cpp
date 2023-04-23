@@ -15,9 +15,9 @@
 //sky
 glm::vec3 sky_color = glm::vec3(0.1, 0.4, 1.0);
 glm::vec3 sun_color = glm::vec3(1.0, 1.0, 1.0);
-float sun_intensity = 1.0f;
+float sun_intensity = 15.0f;
 glm::vec3 sun_dir = glm::normalize(glm::vec3(0.0, -1.0, 0.0));
-float sun_angle = 3.1415926f*0.2f;
+float sun_angle = 3.1415926f*0.05f;
 glm::vec3 calc_sky_color(glm::vec3 dir)
 {
 	float dir_up_cosine = glm::dot(dir, glm::vec3(0, 1, 0));
@@ -29,6 +29,15 @@ glm::vec3 calc_sky_color(glm::vec3 dir)
 }
 
 //intersection code
+struct IntersectionData
+{
+	float t, u, v, w;
+	glm::vec3 normal;
+	
+	void reset(){t = -1.0f;}
+	bool hit(){return t >= 0.0f;}
+};
+
 glm::vec2 raySphere(glm::vec3 rayOrigin, glm::vec3 rayDir, glm::vec3 sphereCentre, float sphereRadius) {
     glm::vec3 offset = rayOrigin - sphereCentre;
     float a = 1.0; // Set to dot(rayDir, rayDir) if rayDir might be not normalized
@@ -73,6 +82,27 @@ glm::vec3 rayTriangle(glm::vec3 ray_orig, glm::vec3 ray_dir, glm::vec3 v0, glm::
 	}
 
 	return glm::vec3(FLT_MAX, 0.0, 0.0);
+}
+
+constexpr int num_spheres = 3;
+glm::vec3 sphere_positions[num_spheres] = {glm::vec3(0), glm::vec3(3, 1, 0), glm::vec3(0, -1001, 0)};
+float sphere_radii[num_spheres] = {1.0f, 2.0f, 1000.0f};
+IntersectionData TraceScene(const glm::vec3& ray_orig, const glm::vec3& ray_dir)
+{
+	IntersectionData isect_data;
+	isect_data.t = -1.0f;
+	for(int i = 0; i < num_spheres; ++i)
+	{
+		glm::vec2 rs_result = raySphere(ray_orig, ray_dir, sphere_positions[i], sphere_radii[i]);
+		if(rs_result.x >= 0.0 && (!isect_data.hit() || rs_result.x < isect_data.t))
+		{
+			isect_data.t = rs_result.x;
+			//no barycentrics on the sphere, so u, v, w are ignored
+			isect_data.normal = glm::normalize(ray_orig + ray_dir*rs_result.x - sphere_positions[i]);
+		}
+	}
+	
+	return isect_data;
 }
 
 //low discrepancy sequence
@@ -222,6 +252,15 @@ int main(int argc, char ** argv)
 		glm::mat4 viewproj = proj * glm::inverse(view);
 		glm::mat4 invviewproj = glm::inverse(viewproj);
 		static glm::uint frame_idx = 0;
+		constexpr int sobol_seq_count = 1;
+		glm::vec2 sobol_seq_points[sobol_seq_count];
+		for(int i = 0; i < sobol_seq_count; ++i)
+		{
+			glm::uvec2 ip = Sobol(frame_idx * sobol_seq_count + i);
+			ip.x = OwenScramble(ip.x, 0xe7843fbau);
+			ip.y = OwenScramble(ip.y, 0x8d8fb1e9u);
+			sobol_seq_points[i] = glm::vec2(ip) / float(0xffffffffu);
+		}
 		for(int y = 0; y < win_height; ++y)
 		{
 			for(int x = 0; x < win_width; ++x)
@@ -236,24 +275,23 @@ int main(int argc, char ** argv)
 				
 				//glm::vec3 rt_result = rayTriangle(ray_orig, ray_dir, glm::vec3(1, 0, 0), glm::vec3(-1, 0, 0), glm::vec3(0, 1, 0), 0.0, FLT_MAX);
 				//if(rt_result.x != FLT_MAX)
-				glm::vec3 sphere_orig = glm::vec3(0.0, 0.0, 0.0);
-				glm::vec2 rt_result = raySphere(ray_orig, ray_dir, sphere_orig, 1.0f);
-				if(rt_result.x >= 0.0)
+				IntersectionData isect_data = TraceScene(ray_orig, ray_dir);
+				if(isect_data.hit())
 				{
-					glm::vec3 normal = glm::normalize(ray_orig + ray_dir*rt_result.x - sphere_orig);
 					//sample sky by bouncing off the sphere
+					glm::vec2 rand_uv = glm::fract(sobol_seq_points[0] + glm::vec2(blue_noise_pixels[x%blue_noise_width + y%blue_noise_height*blue_noise_height]));
 					
-					glm::uvec2 ip = Sobol(frame_idx);
-					ip.x = OwenScramble(ip.x, 0xe7843fbau);
-					ip.y = OwenScramble(ip.y, 0x8d8fb1e9u);
-					glm::vec2 rand_uv = glm::vec2(ip) / float(0xffffffffu);
-					rand_uv = glm::fract(rand_uv + glm::vec2(blue_noise_pixels[x%blue_noise_width + y%blue_noise_height*blue_noise_height]));
-					glm::vec3 incident_dir = glm::normalize(map_to_unit_hemisphere_cosine_weighted(rand_uv, normal));
-					//float cosine = glm::dot(normal, incident_dir);
-															
+					//make new ray
+					ray_orig = ray_orig + ray_dir * isect_data.t;
+					ray_orig += isect_data.normal * 0.0005f;//ray bias
+					ray_dir = glm::normalize(map_to_unit_hemisphere_cosine_weighted(rand_uv, isect_data.normal));
+					
+					isect_data = TraceScene(ray_orig, ray_dir);
+					
+					//float cosine = glm::dot(isect_data.normal, ray_dir);					
 					//pretty much all terms are canceled out by cosine weighted sampling with pdf=cosine/PI,
 					//would have been this otherwise: cosine * radiance * albedo/PI / pdf
-					color += calc_sky_color(incident_dir);
+					color += calc_sky_color(ray_dir) * (isect_data.hit()?0.0f:1.0f);
 				}
 				else
 				{
