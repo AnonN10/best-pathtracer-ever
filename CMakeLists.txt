@@ -23,3 +23,6 @@ add_custom_command(
     $<TARGET_FILE_DIR:${PROJECT_NAME}>
     VERBATIM)
 endif()
+
+# copy resources to build directory
+file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/bluenoise256.png DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
