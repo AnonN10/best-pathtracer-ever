@@ -6,6 +6,8 @@
 #include <glm/gtx/transform.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/ext/matrix_projection.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include <glm/gtx/quaternion.hpp>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -13,11 +15,11 @@
 #define PI 3.141592653589793238462643
 
 //sky
-glm::vec3 sky_color = glm::vec3(0.1, 0.4, 1.0);
-glm::vec3 sun_color = glm::vec3(1.0, 1.0, 1.0);
-float sun_intensity = 15.0f;
-glm::vec3 sun_dir = glm::normalize(glm::vec3(0.0, -1.0, 0.0));
-float sun_angle = 3.1415926f*0.05f;
+glm::vec3 sky_color = glm::vec3(0.2, 0.55, 1.0);
+glm::vec3 sun_color = glm::vec3(1.0, 0.6, 0.3);
+float sun_intensity = 7.0f;
+glm::vec3 sun_dir = glm::normalize(glm::vec3(2.0, -1.0, 1.5));
+float sun_angle = 3.1415926f*0.1f;
 glm::vec3 calc_sky_color(glm::vec3 dir)
 {
 	float dir_up_cosine = glm::dot(dir, glm::vec3(0, 1, 0));
@@ -27,6 +29,16 @@ glm::vec3 calc_sky_color(glm::vec3 dir)
 	//return vec3(0.5);//gray furnace
 	//return vec3(0.0);
 }
+
+//transformations
+struct Transform
+{
+	glm::vec3 translation = glm::vec3(0);
+	glm::vec3 scaling = glm::vec3(1);
+	glm::quat rotation = glm::quat();
+	
+	glm::mat4 Compose() {return glm::translate(translation) * glm::toMat4(rotation) * glm::scale(scaling);}
+};
 
 //intersection code
 struct IntersectionData
@@ -85,7 +97,7 @@ glm::vec3 rayTriangle(glm::vec3 ray_orig, glm::vec3 ray_dir, glm::vec3 v0, glm::
 }
 
 constexpr int num_spheres = 3;
-glm::vec3 sphere_positions[num_spheres] = {glm::vec3(0), glm::vec3(3, 1, 0), glm::vec3(0, -1001, 0)};
+glm::vec3 sphere_positions[num_spheres] = {glm::vec3(-2, 0, -5), glm::vec3(1, 1, -5), glm::vec3(0, -1001, -5)};
 float sphere_radii[num_spheres] = {1.0f, 2.0f, 1000.0f};
 IntersectionData TraceScene(const glm::vec3& ray_orig, const glm::vec3& ray_dir)
 {
@@ -103,6 +115,17 @@ IntersectionData TraceScene(const glm::vec3& ray_orig, const glm::vec3& ray_dir)
 	}
 	
 	return isect_data;
+}
+
+//hash
+glm::uint WangHash(glm::uint seed)
+{
+    seed = (seed ^ 61u) ^ (seed >> 16u);
+    seed *= 9u;
+    seed = seed ^ (seed >> 4u);
+    seed *= 0x27d4eb2du;
+    seed = seed ^ (seed >> 15u);
+    return 1u+seed;
 }
 
 //low discrepancy sequence
@@ -145,7 +168,7 @@ glm::uint OwenScramble(glm::uint p, glm::uint seed) {
 }
 
 //sampling
-glm::vec3 map_to_unit_sphere(glm::vec2 uv)
+glm::vec3 MapToUnitSphere(glm::vec2 uv)
 {
     float cos_theta = 2.0*uv.x-1.0;
     float phi = 2.0*PI*uv.y;
@@ -156,9 +179,9 @@ glm::vec3 map_to_unit_sphere(glm::vec2 uv)
     return glm::vec3(sin_theta*cos_phi, cos_theta, sin_theta*sin_phi);
 }
 
-glm::vec3 map_to_unit_hemisphere_cosine_weighted(glm::vec2 uv, glm::vec3 n)
+glm::vec3 MapToUnitHemisphereCosineWeighted(glm::vec2 uv, glm::vec3 n)
 {
-    glm::vec3 p = map_to_unit_sphere(uv);
+    glm::vec3 p = MapToUnitSphere(uv);
     return n+p;
 }
 
@@ -191,7 +214,6 @@ int main(int argc, char ** argv)
 	//load blue noise
 	int blue_noise_width, blue_noise_height, blue_noise_components;
 	const uint8_t* blue_noise_data = stbi_load("bluenoise256.png", &blue_noise_width, &blue_noise_height, &blue_noise_components, 4);
-	std::cout << blue_noise_components << std::endl;
 	glm::vec4* blue_noise_pixels = new glm::vec4[blue_noise_width * blue_noise_height];
 	for(int i = 0; i < blue_noise_width * blue_noise_height; ++i)
 		blue_noise_pixels[i] = glm::vec4(
@@ -202,43 +224,72 @@ int main(int argc, char ** argv)
 		) / 255.0f;
 		
 	//rendering variables
+	Transform camera_transform;
+	glm::vec2 rotation_angles = glm::vec2(0, 0);
+	constexpr int max_bounces = 5;
+	glm::uvec2 sobol_seeds[max_bounces];	
 	float sample_count = 0.0f;
+	
+	for(int i = 0; i < max_bounces; ++i)
+		sobol_seeds[i] = glm::uvec2(
+			WangHash(glm::uint(i*2+0)),
+			WangHash(glm::uint(i*2+1))
+		);
  
     while (!quit)
     {
 		SDL_Event event;
 		SDL_UpdateTexture(texture, NULL, pixels, win_width * sizeof(Uint32));
-        SDL_PollEvent(&event);
-		
-		static glm::vec3 translation = glm::vec3(0, 0, 3);
+        SDL_PollEvent(&event);		
 		
 		bool reset_rendering = false;
         switch (event.type)
         {
             case SDL_QUIT: quit = true; break;
-			case SDL_KEYDOWN:
-                /* Check the SDLKey values and move change the coords */
-                switch( event.key.keysym.sym ){
-                    case SDLK_LEFT:
-                        translation.x -= 1;
-						reset_rendering = true;
-                        break;
-                    case SDLK_RIGHT:
-                        translation.x += 1;
-						reset_rendering = true;
-                        break;
-                    case SDLK_UP:
-                        translation.z -= 1;
-						reset_rendering = true;
-                        break;
-                    case SDLK_DOWN:
-                        translation.z += 1;
-						reset_rendering = true;
-                        break;
-                    default:
-                        break;
-                }
         }
+		
+		const Uint8* state = SDL_GetKeyboardState(nullptr);
+		if (state[SDL_SCANCODE_LEFT]) {
+			rotation_angles.x += 0.1;
+			reset_rendering = true;
+		}
+		if (state[SDL_SCANCODE_RIGHT]) {
+			rotation_angles.x -= 0.1;
+			reset_rendering = true;
+		}
+		if (state[SDL_SCANCODE_DOWN]) {
+			rotation_angles.y -= 0.1;
+			reset_rendering = true;
+		}
+		if (state[SDL_SCANCODE_UP]) {
+			rotation_angles.y += 0.1;
+			reset_rendering = true;
+		}
+		camera_transform.rotation = glm::angleAxis(rotation_angles.x, glm::vec3(0, 1, 0)) * glm::angleAxis(rotation_angles.y, glm::vec3(1, 0, 0));		
+		if (state[SDL_SCANCODE_A]) {
+			camera_transform.translation += camera_transform.rotation * glm::vec3(-1, 0, 0);
+			reset_rendering = true;
+		}
+		if (state[SDL_SCANCODE_D]) {
+			camera_transform.translation += camera_transform.rotation * glm::vec3(1, 0, 0);
+			reset_rendering = true;
+		}
+		if (state[SDL_SCANCODE_Q]) {
+			camera_transform.translation += camera_transform.rotation * glm::vec3(0, -1, 0);
+			reset_rendering = true;
+		}
+		if (state[SDL_SCANCODE_E]) {
+			camera_transform.translation += camera_transform.rotation * glm::vec3(0, 1, 0);
+			reset_rendering = true;
+		}
+		if (state[SDL_SCANCODE_W]) {
+			camera_transform.translation += camera_transform.rotation * glm::vec3(0, 0, -1);
+			reset_rendering = true;
+		}
+		if (state[SDL_SCANCODE_S]) {
+			camera_transform.translation += camera_transform.rotation * glm::vec3(0, 0, 1);
+			reset_rendering = true;
+		}
 		
 		if(reset_rendering)
 		{
@@ -247,20 +298,31 @@ int main(int argc, char ** argv)
 		}
 		
 		//rendering code
-		glm::mat4 view = glm::translate(translation);
+		static glm::uint frame_idx = 0;
+		
+		glm::mat4 view = camera_transform.Compose();
 		glm::mat4 proj = glm::perspective(glm::radians(90.0f), float(win_width)/float(win_height), 0.1f, 100.0f);
 		glm::mat4 viewproj = proj * glm::inverse(view);
 		glm::mat4 invviewproj = glm::inverse(viewproj);
-		static glm::uint frame_idx = 0;
-		constexpr int sobol_seq_count = 1;
-		glm::vec2 sobol_seq_points[sobol_seq_count];
-		for(int i = 0; i < sobol_seq_count; ++i)
+		
+		constexpr int sobol_seq_length = 1;
+		glm::vec2 sobol_seq_points[max_bounces][sobol_seq_length];
+		for(int seq = 0; seq < max_bounces; ++seq)
+			for(int i = 0; i < sobol_seq_length; ++i)
+			{
+				glm::uvec2 ip = Sobol(frame_idx * sobol_seq_length + i);
+				ip.x = OwenScramble(ip.x, sobol_seeds[seq][0]);
+				ip.y = OwenScramble(ip.y, sobol_seeds[seq][1]);
+				sobol_seq_points[seq][i] = glm::vec2(ip) / float(0xffffffffu);
+			}
+		
+		/*sample_count = 1.0f;
+		glm::ivec2 sobol_coord = glm::ivec2(sobol_seq_points[1][0] * glm::vec2(win_width, win_height));
+		if(sobol_coord.x < win_width && sobol_coord.x >= 0 && sobol_coord.y < win_height && sobol_coord.y >= 0)
 		{
-			glm::uvec2 ip = Sobol(frame_idx * sobol_seq_count + i);
-			ip.x = OwenScramble(ip.x, 0xe7843fbau);
-			ip.y = OwenScramble(ip.y, 0x8d8fb1e9u);
-			sobol_seq_points[i] = glm::vec2(ip) / float(0xffffffffu);
-		}
+			color_buffer[sobol_coord.x+win_width*sobol_coord.y] += glm::vec4(glm::vec3(0.5f), 1.0f);
+		}*/		
+		
 		for(int y = 0; y < win_height; ++y)
 		{
 			for(int x = 0; x < win_width; ++x)
@@ -268,34 +330,47 @@ int main(int argc, char ** argv)
 				//read previous color
 				glm::vec3 color = glm::vec3(color_buffer[x+win_width*y]);
 				
-				glm::vec2 ndc_xy = glm::vec2(float(x)/float(win_width)*2.0-1.0, -(float(y)/float(win_height)*2.0-1.0));				
+				//portion of radiance that passes from the last vertex of the path to the sensor, a R[0; 1]^3 vector value
+				glm::vec3 throughput = glm::vec3(1);
+				
+				//obtain NDC space screen coordinate
+				glm::vec2 ndc_xy = glm::vec2(float(x)/float(win_width)*2.0-1.0, -(float(y)/float(win_height)*2.0-1.0));
+				//add jitter for anti-aliasing
+				ndc_xy += sobol_seq_points[0][0]/glm::vec2(win_width, win_height)*2.0f;
+				
+				//primary ray
 				glm::vec3 ray_orig = UnprojectNDC(glm::vec3(ndc_xy, 0.0f), invviewproj);
 				glm::vec3 ray_dir = UnprojectNDC(glm::vec3(ndc_xy, 1.0f), invviewproj);
 				ray_dir = glm::normalize(ray_dir - ray_orig);
 				
-				//glm::vec3 rt_result = rayTriangle(ray_orig, ray_dir, glm::vec3(1, 0, 0), glm::vec3(-1, 0, 0), glm::vec3(0, 1, 0), 0.0, FLT_MAX);
-				//if(rt_result.x != FLT_MAX)
-				IntersectionData isect_data = TraceScene(ray_orig, ray_dir);
-				if(isect_data.hit())
+				//fetch blue noise mask value for this pixel
+				glm::vec2 blue_noise = glm::vec2(blue_noise_pixels[x%blue_noise_width + y%blue_noise_height*blue_noise_height]);
+				
+				for(int bounce = 0; bounce < max_bounces; ++bounce)
 				{
-					//sample sky by bouncing off the sphere
-					glm::vec2 rand_uv = glm::fract(sobol_seq_points[0] + glm::vec2(blue_noise_pixels[x%blue_noise_width + y%blue_noise_height*blue_noise_height]));
-					
-					//make new ray
-					ray_orig = ray_orig + ray_dir * isect_data.t;
-					ray_orig += isect_data.normal * 0.0005f;//ray bias
-					ray_dir = glm::normalize(map_to_unit_hemisphere_cosine_weighted(rand_uv, isect_data.normal));
-					
-					isect_data = TraceScene(ray_orig, ray_dir);
-					
-					//float cosine = glm::dot(isect_data.normal, ray_dir);					
-					//pretty much all terms are canceled out by cosine weighted sampling with pdf=cosine/PI,
-					//would have been this otherwise: cosine * radiance * albedo/PI / pdf
-					color += calc_sky_color(ray_dir) * (isect_data.hit()?0.0f:1.0f);
-				}
-				else
-				{
-					color += calc_sky_color(ray_dir);
+					IntersectionData isect_data = TraceScene(ray_orig, ray_dir);
+					glm::vec3 albedo = glm::vec3(1.0);
+					if(isect_data.hit())
+					{
+						//blue noise dithering of the low discrepancy sequence
+						glm::vec2 rand_uv = glm::fract(sobol_seq_points[bounce][0] + blue_noise);
+						
+						//make new ray
+						ray_orig = ray_orig + ray_dir * isect_data.t;
+						ray_orig += isect_data.normal * 0.0005f;//ray bias
+						ray_dir = glm::normalize(MapToUnitHemisphereCosineWeighted(rand_uv, isect_data.normal));
+						
+						float cosine = glm::dot(isect_data.normal, ray_dir);
+						//pretty much all the terms are canceled out by the cosine weighted hemisphere sampling with PDF=cosine/PI,
+						//would have been this otherwise: cosine * radiance * albedo/PI / PDF
+						throughput *= albedo;
+					}
+					else
+					{
+						//hit nothing, so fetch the sky color and multiply by the portion of how much light goes to the sensor
+						color += throughput * calc_sky_color(ray_dir);
+						break;
+					}
 				}
 				
 				//store new color
@@ -313,6 +388,8 @@ int main(int argc, char ** argv)
 				int i = x+win_width*y;
 				//NOTE the sample count division, doing it here to not involve another intermediate buffer
 				auto color = color_buffer[i] / sample_count;
+				//approximate sRGB transfer
+				color = glm::pow(color, glm::vec4(1.0f/2.2f));
 				pixels[i] = SDL_MapRGBA(
 					pxfmt,
 					glm::clamp(color.r, 0.0f, 1.0f)*255,
