@@ -249,6 +249,14 @@ int main(int argc, char ** argv)
         }
 		
 		const Uint8* state = SDL_GetKeyboardState(nullptr);
+		if (state[SDL_SCANCODE_KP_PLUS]) {
+			camera_transform.scaling *= 2.0;
+			reset_rendering = true;
+		}
+		if (state[SDL_SCANCODE_KP_MINUS]) {
+			camera_transform.scaling /= 2.0;
+			reset_rendering = true;
+		}
 		if (state[SDL_SCANCODE_LEFT]) {
 			rotation_angles.x += 0.1;
 			reset_rendering = true;
@@ -267,27 +275,27 @@ int main(int argc, char ** argv)
 		}
 		camera_transform.rotation = glm::angleAxis(rotation_angles.x, glm::vec3(0, 1, 0)) * glm::angleAxis(rotation_angles.y, glm::vec3(1, 0, 0));		
 		if (state[SDL_SCANCODE_A]) {
-			camera_transform.translation += camera_transform.rotation * glm::vec3(-1, 0, 0);
+			camera_transform.translation += camera_transform.rotation * (glm::vec3(-1, 0, 0) * camera_transform.scaling);
 			reset_rendering = true;
 		}
 		if (state[SDL_SCANCODE_D]) {
-			camera_transform.translation += camera_transform.rotation * glm::vec3(1, 0, 0);
+			camera_transform.translation += camera_transform.rotation * (glm::vec3(1, 0, 0) * camera_transform.scaling);
 			reset_rendering = true;
 		}
 		if (state[SDL_SCANCODE_Q]) {
-			camera_transform.translation += camera_transform.rotation * glm::vec3(0, -1, 0);
+			camera_transform.translation += camera_transform.rotation * (glm::vec3(0, -1, 0) * camera_transform.scaling);
 			reset_rendering = true;
 		}
 		if (state[SDL_SCANCODE_E]) {
-			camera_transform.translation += camera_transform.rotation * glm::vec3(0, 1, 0);
+			camera_transform.translation += camera_transform.rotation * (glm::vec3(0, 1, 0) * camera_transform.scaling);
 			reset_rendering = true;
 		}
 		if (state[SDL_SCANCODE_W]) {
-			camera_transform.translation += camera_transform.rotation * glm::vec3(0, 0, -1);
+			camera_transform.translation += camera_transform.rotation * (glm::vec3(0, 0, -1) * camera_transform.scaling);
 			reset_rendering = true;
 		}
 		if (state[SDL_SCANCODE_S]) {
-			camera_transform.translation += camera_transform.rotation * glm::vec3(0, 0, 1);
+			camera_transform.translation += camera_transform.rotation * (glm::vec3(0, 0, 1) * camera_transform.scaling);
 			reset_rendering = true;
 		}
 		
@@ -408,6 +416,7 @@ int main(int argc, char ** argv)
 	SDL_DestroyWindow(window);
 	SDL_Quit();
 
+	delete[] color_buffer;
 	delete[] pixels;
 	SDL_DestroyTexture(texture);
 	SDL_DestroyRenderer(renderer);
