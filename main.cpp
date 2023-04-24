@@ -19,9 +19,9 @@
 //sky
 glm::vec3 sky_color = glm::vec3(0.2, 0.55, 1.0);
 glm::vec3 sun_color = glm::vec3(1.0, 0.6, 0.3);
-float sun_intensity = 50.0f;
+float sun_intensity = 150.0f;
 glm::vec3 sun_dir = glm::normalize(glm::vec3(2.0, -1.0, 1.5));
-float sun_angle = 3.1415926f*0.04f;
+float sun_angle = 3.1415926f*0.03f;
 glm::vec3 calc_sky_color(glm::vec3 dir)
 {
 	float dir_up_cosine = glm::dot(dir, glm::vec3(0, 1, 0));
@@ -143,9 +143,20 @@ glm::uint WangHash(glm::uint seed)
 }
 
 //low discrepancy sequence
+//n-dimensional R-sequence by Martin Roberts,
+//from "The Unreasonable Effectiveness of Quasirandom Sequences"
 float RLDS(float phi_d, float d, float n) {
 	float a = 1.0f/glm::pow(phi_d, d);
 	return glm::fract(5.0f + a*n);
+}
+
+float RLDSComputePhi(glm::uint d_max) {
+	float phi_d = 2.0f;
+	for(int i = 0; i < 15; ++i)
+	{
+		phi_d = glm::pow(1.0f + phi_d, 1.0f/float(phi_d+1));
+	}
+	return phi_d;
 }
 
 //owen scrambling
@@ -273,17 +284,13 @@ int main(int argc, char ** argv)
 	//rendering variables
 	Transform camera_transform;
 	glm::vec2 rotation_angles = glm::vec2(0, 0);
-	constexpr int max_bounces = 4;
+	constexpr int max_bounces = 5;
 	float sample_count = 0.0f;
 	glm::mat3 sun_transform = BuildLocalCoords(-sun_dir);
 	
 	//R LDS
 	constexpr glm::uint RLDS_d_max = max_bounces*2;
-	float RLDS_phi_d = 2.0f;
-	for(int i = 0; i < 15; ++i)
-	{
-		RLDS_phi_d = glm::pow(1.0f + RLDS_phi_d, 1.0f/float(RLDS_d_max+1));
-	}
+	float RLDS_phi_d = RLDSComputePhi(RLDS_d_max);
 	//std::cout << "d_max = " << RLDS_d_max << std::endl;
 	//std::cout << "phi_d = " << RLDS_phi_d << std::endl;
 	
@@ -461,6 +468,7 @@ int main(int argc, char ** argv)
 					{
 						//the ray didn't hit any geometry, so fetch the sky color and multiply by the portion of how much light goes to the sensor
 #ifdef ENABLE_NEE
+						//must not ignore sun for primary rays, hence bounce!=0 check is added
 						float mis_weight = bounce!=0? BalanceHeuristic(MapToUnitHemisphereCosineWeightedPDF(cosine), SampleSkySunPDF(ray_dir)): 1.0f;						
 						color += mis_weight * throughput * calc_sky_color(ray_dir);
 #else
