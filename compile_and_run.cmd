@@ -1,8 +1,4 @@
-mkdir contrib
-
-call :git_add_submodule https://github.com/libsdl-org/SDL, SDL, SDL2
-call :git_add_submodule https://github.com/madmann91/bvh, bvh, master
-call :git_add_submodule https://github.com/AnonN10/glm, glm, master
+git submodule update --init --recursive
 
 mkdir build
 cd build
@@ -14,11 +10,3 @@ cmake --build . --config Release || pause && exit
 
 pause
 exit
-
-:git_add_submodule
-cd contrib
-git submodule add %~1
-cd %~2
-git checkout %~3
-cd ../../
-EXIT /B 0
