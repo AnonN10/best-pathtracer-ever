@@ -54,11 +54,19 @@ glm::mat3 BuildLocalCoords(const glm::vec3& n)
     return glm::mat3(t, n, bt);
 }
 
+//materials
+struct Material
+{
+	glm::vec3 albedo = glm::vec3(1.0);
+	glm::vec3 emission = glm::vec3(0.0);
+};
+
 //intersection code
 struct IntersectionData
 {
 	float t, u, v, w;
 	glm::vec3 normal;
+	Material* material;
 	
 	void reset(){t = -1.0f;}
 	bool hit(){return t >= 0.0f;}
@@ -110,9 +118,16 @@ glm::vec3 rayTriangle(glm::vec3 ray_orig, glm::vec3 ray_dir, glm::vec3 v0, glm::
 	return glm::vec3(FLT_MAX, 0.0, 0.0);
 }
 
+//scene
 constexpr int num_spheres = 3;
 glm::vec3 sphere_positions[num_spheres] = {glm::vec3(-2, 0, -5), glm::vec3(1, 1, -5), glm::vec3(0, -1001, -5)};
 float sphere_radii[num_spheres] = {1.0f, 2.0f, 1000.0f};
+Material sphere_materials[num_spheres] = {
+	{glm::vec3(1.0, 0.1, 0.1), glm::vec3(0.0)},
+	{glm::vec3(0.1, 1.0, 0.1), glm::vec3(0.0)},
+	{glm::vec3(1.0, 1.0, 1.0), glm::vec3(0.0)}
+};
+
 IntersectionData TraceScene(const glm::vec3& ray_orig, const glm::vec3& ray_dir)
 {
 	IntersectionData isect_data;
@@ -125,6 +140,7 @@ IntersectionData TraceScene(const glm::vec3& ray_orig, const glm::vec3& ray_dir)
 			isect_data.t = rs_result.x;
 			//no barycentrics on the sphere, so u, v, w are ignored
 			isect_data.normal = glm::normalize(ray_orig + ray_dir*rs_result.x - sphere_positions[i]);
+			isect_data.material = &sphere_materials[i];
 		}
 	}
 	
@@ -284,7 +300,7 @@ int main(int argc, char ** argv)
 	//rendering variables
 	Transform camera_transform;
 	glm::vec2 rotation_angles = glm::vec2(0, 0);
-	constexpr int max_bounces = 5;
+	constexpr int max_bounces = 10;
 	float sample_count = 0.0f;
 	glm::mat3 sun_transform = BuildLocalCoords(-sun_dir);
 	
@@ -420,10 +436,12 @@ int main(int argc, char ** argv)
 				for(int bounce = 0; bounce < max_bounces; ++bounce)
 				{
 					IntersectionData isect_data = TraceScene(ray_orig, ray_dir);
-					glm::vec3 albedo = glm::vec3(1.0);
 					float cosine;
 					if(isect_data.hit())
 					{
+						//add contribution from the surface emission
+						color += throughput * isect_data.material->emission;
+						
 						//fetch blue noise mask value for this bounce
 						glm::vec2 blue_noise = glm::vec2(blue_noise_pixels[(x+1324*bounce)%blue_noise_width + (y+764352*bounce)%blue_noise_height*blue_noise_height]);
 						//do the blue noise dithering of the low discrepancy sequence
@@ -456,13 +474,13 @@ int main(int argc, char ** argv)
 						{
 							//compute Multiple Importance Sampling weight and add the weighted contribution
 							float nee_mis_weight = BalanceHeuristic(nee_pdf, MapToUnitHemisphereCosineWeightedPDF(nee_cosine));
-							color += nee_mis_weight * throughput * (albedo/float(PI)) * nee_cosine * calc_sky_color(nee_ray_dir) / nee_pdf;
+							color += nee_mis_weight * throughput * (isect_data.material->albedo/float(PI)) * nee_cosine * calc_sky_color(nee_ray_dir) / nee_pdf;
 						}
 #endif
 						
 						//pretty much all the terms are canceled out by the cosine weighted hemisphere sampling with BRDF=albedo/PI and PDF=cosine/PI,
 						//would have been this otherwise: cosine * BRDF / PDF
-						throughput *= albedo;
+						throughput *= isect_data.material->albedo;
 					}
 					else
 					{
