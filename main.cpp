@@ -16,22 +16,6 @@
 
 #define ENABLE_NEE
 
-//sky
-glm::vec3 sky_color = glm::vec3(0.2, 0.55, 1.0);
-glm::vec3 sun_color = glm::vec3(1.0, 0.6, 0.3);
-float sun_intensity = 150.0f;
-glm::vec3 sun_dir = glm::normalize(glm::vec3(2.0, -1.0, 1.5));
-float sun_angle = 3.1415926f*0.03f;
-glm::vec3 calc_sky_color(glm::vec3 dir)
-{
-	float dir_up_cosine = glm::dot(dir, glm::vec3(0, 1, 0));
-	float dir_sun_angle = glm::acos(glm::dot(dir, -sun_dir));
-	return (dir_sun_angle < sun_angle)?(sun_color*sun_intensity):(sky_color*(glm::clamp(1.0f-dir_up_cosine*0.7f, 0.3f, 1.0f)));
-	//return vec3(1.0);//white furnace
-	//return vec3(0.5);//gray furnace
-	//return vec3(0.0);
-}
-
 //transformations
 struct Transform
 {
@@ -52,6 +36,44 @@ glm::mat3 BuildLocalCoords(const glm::vec3& n)
     glm::vec3 t = glm::vec3(1.0 + s * n.x* n.x * a, s * b, -s * n.x);
     glm::vec3 bt = glm::vec3(b, s + n.y * n.y * a, -n.y);
     return glm::mat3(t, n, bt);
+}
+
+//sky
+glm::vec3 sky_color = glm::vec3(0.2, 0.55, 1.0);
+glm::vec3 sun_color = glm::vec3(1.0, 0.6, 0.3);
+float sun_intensity = 150.0f;
+//working variable, (re)calculated from sun_orientation_theta and sun_orientation_phi
+glm::vec3 sun_dir = glm::normalize(glm::vec3(2.0, -1.0, 1.5));
+//amount of radians that the sun disk takes, in [0; PI],
+//equivalent to theta*2 in spherical coordinates
+float sun_angular_measure = 3.1415926f*0.03f;
+//position of the sun in spherical coordinates
+float sun_orientation_theta = 1.94f;//[0; PI
+float sun_orientation_phi = 5.64f;//[0; 2*PI]
+glm::mat3 sun_transform = BuildLocalCoords(-sun_dir);
+
+glm::vec3 calc_sky_color(glm::vec3 dir)
+{
+	float dir_up_cosine = glm::dot(dir, glm::vec3(0, 1, 0));
+	float dir_sun_angle = glm::acos(glm::dot(dir, -sun_dir));
+	return (dir_sun_angle < sun_angular_measure)?(sun_color*sun_intensity):(sky_color*(glm::clamp(1.0f-dir_up_cosine*0.7f, 0.3f, 1.0f)));
+	//return vec3(1.0);//white furnace
+	//return vec3(0.5);//gray furnace
+	//return vec3(0.0);
+}
+
+void UpdateSun()
+{
+	//convert spherical to cartesian,
+	//where theta=inclination and phi=azimuth
+	//and coordinate system is +X right +Y up -Z forward (OpenGL convention)
+	sun_dir = glm::vec3(
+		glm::sin(sun_orientation_theta)*glm::cos(sun_orientation_phi),
+		glm::cos(sun_orientation_theta),
+		-glm::sin(sun_orientation_theta)*glm::sin(sun_orientation_phi)
+	);
+	//convert direction to an orthonormal basis for ray generation
+	sun_transform = BuildLocalCoords(-sun_dir);
 }
 
 //materials
@@ -241,16 +263,16 @@ float MapToSolidAnglePDF(float theta_max)
 
 glm::vec3 SampleSkySun(const glm::vec2& uv, const glm::vec3& normal, const glm::mat3& sun_transform, float& cosine, float& PDF)
 {	
-	glm::vec3 dir = sun_transform * MapToSolidAngle(uv, sun_angle);
+	glm::vec3 dir = sun_transform * MapToSolidAngle(uv, sun_angular_measure);
 	cosine = glm::clamp(glm::dot(normal, dir), 0.0f, 1.0f);
-	PDF = MapToSolidAnglePDF(sun_angle);
+	PDF = MapToSolidAnglePDF(sun_angular_measure);
     return dir;
 }
 
 float SampleSkySunPDF(glm::vec3 dir)
 {
 	float dir_sun_angle = glm::acos(glm::clamp(glm::dot(dir, -sun_dir), 0.0f, 1.0f));
-	return (dir_sun_angle < sun_angle)?MapToSolidAnglePDF(sun_angle):0.0f;
+	return (dir_sun_angle < sun_angular_measure)?MapToSolidAnglePDF(sun_angular_measure):0.0f;
 }
 
 //MIS
@@ -302,7 +324,6 @@ int main(int argc, char ** argv)
 	glm::vec2 rotation_angles = glm::vec2(0, 0);
 	constexpr int max_bounces = 10;
 	float sample_count = 0.0f;
-	glm::mat3 sun_transform = BuildLocalCoords(-sun_dir);
 	
 	//R LDS
 	constexpr glm::uint RLDS_d_max = max_bounces*2;
@@ -314,18 +335,23 @@ int main(int argc, char ** argv)
 	glm::uint lds_scramble_seeds[max_bounces*2];
 	for(glm::uint i = 0; i < max_bounces*2; ++i)
 		lds_scramble_seeds[i] = WangHash(i);
+	
+	UpdateSun();
  
     while (!quit)
     {
 		SDL_Event event;
 		SDL_UpdateTexture(texture, NULL, pixels, win_width * sizeof(Uint32));
-        SDL_PollEvent(&event);		
+		
+		while(SDL_PollEvent(&event))
+		{
+			switch (event.type)
+			{
+				case SDL_QUIT: quit = true; break;
+			}
+		}
 		
 		bool reset_rendering = false;
-        switch (event.type)
-        {
-            case SDL_QUIT: quit = true; break;
-        }
 		
 		const Uint8* state = SDL_GetKeyboardState(nullptr);
 		if (state[SDL_SCANCODE_KP_PLUS]) {
@@ -375,6 +401,38 @@ int main(int argc, char ** argv)
 		}
 		if (state[SDL_SCANCODE_S]) {
 			camera_transform.translation += camera_transform.rotation * (glm::vec3(0, 0, 1) * camera_transform.scaling);
+			reset_rendering = true;
+		}
+		//resize sun
+		if (state[SDL_SCANCODE_T]) {
+			sun_angular_measure = glm::clamp(sun_angular_measure - float(PI/48.0f), 0.001f, float(PI));
+			UpdateSun();
+			reset_rendering = true;
+		}
+		if (state[SDL_SCANCODE_Y]) {
+			sun_angular_measure = glm::clamp(sun_angular_measure + float(PI/48.0f), 0.001f, float(PI));
+			UpdateSun();
+			reset_rendering = true;
+		}
+		//rotate sun
+		if (state[SDL_SCANCODE_U]) {
+			sun_orientation_phi = glm::mod(sun_orientation_phi + float(PI/16.0f), float(PI*2.0f));
+			UpdateSun();
+			reset_rendering = true;
+		}
+		if (state[SDL_SCANCODE_I]) {
+			sun_orientation_phi = glm::mod(sun_orientation_phi - float(PI/16.0f), float(PI*2.0f));
+			UpdateSun();
+			reset_rendering = true;
+		}
+		if (state[SDL_SCANCODE_O]) {
+			sun_orientation_theta = glm::clamp(sun_orientation_theta + float(PI/16.0f), 0.0f, float(PI));
+			UpdateSun();
+			reset_rendering = true;
+		}
+		if (state[SDL_SCANCODE_P]) {
+			sun_orientation_theta = glm::clamp(sun_orientation_theta - float(PI/16.0f), 0.0f, float(PI));
+			UpdateSun();
 			reset_rendering = true;
 		}
 		//just reset rendering by holding
