@@ -6,12 +6,16 @@ project(HelloWorld)
 # add the executable
 add_executable(HelloWorld main.cpp)
 
+set_property(TARGET HelloWorld PROPERTY CXX_STANDARD 20)
+set_property(TARGET HelloWorld PROPERTY CXX_STANDARD_REQUIRED On)
+set_property(TARGET HelloWorld PROPERTY CXX_EXTENSIONS Off)
+
 add_subdirectory(contrib/SDL)
 add_subdirectory(contrib/bvh)
 add_subdirectory(contrib/glm)
 
 # libraries
-target_link_libraries(${PROJECT_NAME} PRIVATE SDL2::SDL2 SDL2::SDL2main glm)
+target_link_libraries(${PROJECT_NAME} PRIVATE SDL2::SDL2 SDL2::SDL2main glm bvh)
 
 # Windows-only configurations
 if (WIN32)

@@ -3,11 +3,14 @@
 #include <iostream>
 
 #include <glm/glm.hpp>
+#include <glm/vector_relational.hpp>
 #include <glm/gtx/transform.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/ext/matrix_projection.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/quaternion.hpp>
+
+#include <bvh/v2/thread_pool.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -48,7 +51,7 @@ glm::vec3 sun_dir = glm::normalize(glm::vec3(2.0, -1.0, 1.5));
 //equivalent to theta*2 in spherical coordinates
 float sun_angular_measure = 3.1415926f*0.03f;
 //position of the sun in spherical coordinates
-float sun_orientation_theta = 1.94f;//[0; PI
+float sun_orientation_theta = 1.94f;//[0; PI]
 float sun_orientation_phi = 5.64f;//[0; 2*PI]
 glm::mat3 sun_transform = BuildLocalCoords(-sun_dir);
 
@@ -291,27 +294,28 @@ glm::vec3 UnprojectNDC(glm::vec3 ndc, glm::mat4 invmvp)
 int main(int argc, char ** argv)
 {
 	bool quit = false;
-	int win_width = 640, win_height = 480;
+	glm::ivec2 win_resolution(640, 480);
 
 	SDL_Init(SDL_INIT_VIDEO);	
 
-	SDL_Window * window = SDL_CreateWindow("Behold", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, win_width, win_height, 0);
+	SDL_Window * window = SDL_CreateWindow("Behold", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, win_resolution.x, win_resolution.y, 0);
 
 	SDL_Renderer * renderer = SDL_CreateRenderer(window, -1, 0);
-	SDL_Texture * texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, win_width, win_height);
+	SDL_Texture * texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, win_resolution.x, win_resolution.y);
 
 	SDL_PixelFormat* pxfmt = SDL_AllocFormat(SDL_PIXELFORMAT_ARGB8888);	
 
-	glm::vec4* color_buffer = new glm::vec4[win_width * win_height];
+	glm::vec4* color_buffer = new glm::vec4[win_resolution.x * win_resolution.y];
 
-	Uint32 * pixels = new Uint32[win_width * win_height];
-	memset(pixels, 255, win_width * win_height * sizeof(Uint32));
+	Uint32 * pixels = new Uint32[win_resolution.x * win_resolution.y];
+	memset(pixels, 255, win_resolution.x * win_resolution.y * sizeof(Uint32));
 	
 	//load blue noise
-	int blue_noise_width, blue_noise_height, blue_noise_components;
-	const uint8_t* blue_noise_data = stbi_load("bluenoise256.png", &blue_noise_width, &blue_noise_height, &blue_noise_components, 4);
-	glm::vec4* blue_noise_pixels = new glm::vec4[blue_noise_width * blue_noise_height];
-	for(int i = 0; i < blue_noise_width * blue_noise_height; ++i)
+	glm::ivec2 blue_noise_resolution;
+	int blue_noise_components;
+	const uint8_t* blue_noise_data = stbi_load("bluenoise256.png", &blue_noise_resolution.x, &blue_noise_resolution.y, &blue_noise_components, 4);
+	glm::vec4* blue_noise_pixels = new glm::vec4[blue_noise_resolution.x * blue_noise_resolution.y];
+	for(int i = 0; i < blue_noise_resolution.x * blue_noise_resolution.y; ++i)
 		blue_noise_pixels[i] = glm::vec4(
 			blue_noise_data[i*4+0],
 			blue_noise_data[i*4+1],
@@ -337,11 +341,13 @@ int main(int argc, char ** argv)
 		lds_scramble_seeds[i] = WangHash(i);
 	
 	UpdateSun();
+	
+	bvh::v2::ThreadPool pool;	
  
     while (!quit)
     {
 		SDL_Event event;
-		SDL_UpdateTexture(texture, NULL, pixels, win_width * sizeof(Uint32));
+		SDL_UpdateTexture(texture, NULL, pixels, win_resolution.x * sizeof(Uint32));
 		
 		while(SDL_PollEvent(&event))
 		{
@@ -442,7 +448,7 @@ int main(int argc, char ** argv)
 		
 		if(reset_rendering)
 		{
-			for(int i = 0; i < win_width * win_height; ++i) color_buffer[i] = glm::vec4(0.0, 0.0, 0.0, 1.0);
+			for(int i = 0; i < win_resolution.x * win_resolution.y; ++i) color_buffer[i] = glm::vec4(0.0, 0.0, 0.0, 1.0);
 			sample_count = 0.0f;
 		}
 		
@@ -450,7 +456,7 @@ int main(int argc, char ** argv)
 		static glm::uint frame_idx = 0;
 		
 		glm::mat4 view = camera_transform.Compose();
-		glm::mat4 proj = glm::perspective(glm::radians(90.0f), float(win_width)/float(win_height), 0.1f, 100.0f);
+		glm::mat4 proj = glm::perspective(glm::radians(90.0f), float(win_resolution.x)/float(win_resolution.y), 0.1f, 100.0f);
 		glm::mat4 viewproj = proj * glm::inverse(view);
 		glm::mat4 invviewproj = glm::inverse(viewproj);
 		
@@ -464,109 +470,122 @@ int main(int argc, char ** argv)
 			}
 		
 		/*sample_count = 1.0f;
-		glm::ivec2 lds_coord = glm::ivec2(glm::vec2(lds_points[2][0], lds_points[3][0]) * glm::vec2(win_width, win_height));
-		if(lds_coord.x < win_width && lds_coord.x >= 0 && lds_coord.y < win_height && lds_coord.y >= 0)
+		glm::ivec2 lds_coord = glm::ivec2(glm::vec2(lds_points[2][0], lds_points[3][0]) * glm::vec2(win_resolution.x, win_resolution.y));
+		if(lds_coord.x < win_resolution.x && lds_coord.x >= 0 && lds_coord.y < win_resolution.y && lds_coord.y >= 0)
 		{
-			color_buffer[lds_coord.x+win_width*lds_coord.y] += glm::vec4(glm::vec3(0.5f), 1.0f);
+			color_buffer[lds_coord.x+win_resolution.x*lds_coord.y] += glm::vec4(glm::vec3(0.5f), 1.0f);
 		}*/
 		
-		for(int y = 0; y < win_height; ++y)
-		{
-			for(int x = 0; x < win_width; ++x)
-			{
-				//read previous color
-				glm::vec3 color = glm::vec3(color_buffer[x+win_width*y]);
-				
-				//portion of radiance that passes from the last vertex of the path to the sensor, a R[0; 1]^3 vector value
-				glm::vec3 throughput = glm::vec3(1);
-				
-				//obtain NDC space screen coordinate
-				glm::vec2 ndc_xy = glm::vec2(float(x)/float(win_width)*2.0-1.0, -(float(y)/float(win_height)*2.0-1.0));
-				//add jitter for anti-aliasing
-				ndc_xy += glm::vec2(lds_points[0][0], lds_points[1][0])/glm::vec2(win_width, win_height)*2.0f;
-				
-				//primary ray
-				glm::vec3 ray_orig = UnprojectNDC(glm::vec3(ndc_xy, 0.0f), invviewproj);
-				glm::vec3 ray_dir = UnprojectNDC(glm::vec3(ndc_xy, 1.0f), invviewproj);
-				ray_dir = glm::normalize(ray_dir - ray_orig);
-				
-				
-				for(int bounce = 0; bounce < max_bounces; ++bounce)
-				{
-					IntersectionData isect_data = TraceScene(ray_orig, ray_dir);
-					float cosine;
-					if(isect_data.hit())
-					{
-						//add contribution from the surface emission
-						color += throughput * isect_data.material->emission;
-						
-						//fetch blue noise mask value for this bounce
-						glm::vec2 blue_noise = glm::vec2(blue_noise_pixels[(x+1324*bounce)%blue_noise_width + (y+764352*bounce)%blue_noise_height*blue_noise_height]);
-						//do the blue noise dithering of the low discrepancy sequence
-						glm::vec2 rand_uv = glm::fract(glm::vec2(lds_points[bounce*2+0][0], lds_points[bounce*2+1][0]) + blue_noise);
-						
-						//make new ray for a higher dimensional integral of the BRDF estimator
-						ray_orig = ray_orig + ray_dir * isect_data.t;
-						ray_orig += isect_data.normal * 0.0005f;//ray bias
-						ray_dir = glm::normalize(MapToUnitHemisphereCosineWeighted(rand_uv, isect_data.normal));
-						cosine = glm::clamp(glm::dot(isect_data.normal, ray_dir), 0.0f, 1.0f);
-						
+		const glm::ivec2 tile_size(64, 64);
+		glm::ivec2 tile_coord(0, 0);
+		for (tile_coord.y = 0; tile_coord.y < win_resolution.y; tile_coord.y += tile_size[0]) {
+			for (tile_coord.x = 0; tile_coord.x < win_resolution.x; tile_coord.x += tile_size[1]) {
+				glm::ivec2 coord_max(
+					glm::min(tile_coord.x + tile_size[0], win_resolution.x),
+					glm::min(tile_coord.y + tile_size[1], win_resolution.y)
+				);
+				pool.push([tile_coord, coord_max, &color_buffer, win_resolution, &lds_points, &invviewproj, blue_noise_pixels, blue_noise_resolution](size_t thread_id){
+					for (int y = tile_coord.y; y < coord_max.y; ++y) {
+						for (int x = tile_coord.x; x < coord_max.x; ++x) {
+							//read previous color
+							glm::vec3 color = glm::vec3(color_buffer[x+win_resolution.x*y]);
+							
+							//portion of radiance that passes from the last vertex of the path to the sensor, a R[0; 1]^3 vector value
+							glm::vec3 throughput = glm::vec3(1);
+							
+							//obtain NDC space screen coordinate
+							glm::vec2 ndc_xy = glm::vec2(float(x)/float(win_resolution.x)*2.0-1.0, -(float(y)/float(win_resolution.y)*2.0-1.0));
+							//add jitter for anti-aliasing
+							ndc_xy += glm::vec2(lds_points[0][0], lds_points[1][0])/glm::vec2(win_resolution.x, win_resolution.y)*2.0f;
+							
+							//primary ray
+							glm::vec3 ray_orig = UnprojectNDC(glm::vec3(ndc_xy, 0.0f), invviewproj);
+							glm::vec3 ray_dir = UnprojectNDC(glm::vec3(ndc_xy, 1.0f), invviewproj);
+							ray_dir = glm::normalize(ray_dir - ray_orig);
+							
+							
+							for(int bounce = 0; bounce < max_bounces; ++bounce)
+							{
+								IntersectionData isect_data = TraceScene(ray_orig, ray_dir);
+								float cosine;
+								if(isect_data.hit())
+								{
+									//add contribution from the surface emission
+									color += throughput * isect_data.material->emission;
+									
+									//fetch blue noise mask value for this bounce
+									glm::vec2 blue_noise = glm::vec2(blue_noise_pixels[(x+1324*bounce)%blue_noise_resolution.x + (y+764352*bounce)%blue_noise_resolution.y*blue_noise_resolution.y]);
+									//do the blue noise dithering of the low discrepancy sequence
+									glm::vec2 rand_uv = glm::fract(glm::vec2(lds_points[bounce*2+0][0], lds_points[bounce*2+1][0]) + blue_noise);
+									
+									//make new ray for a higher dimensional integral of the BRDF estimator
+									ray_orig = ray_orig + ray_dir * isect_data.t;
+									ray_orig += isect_data.normal * 0.0005f;//ray bias
+									ray_dir = glm::normalize(MapToUnitHemisphereCosineWeighted(rand_uv, isect_data.normal));
+									cosine = glm::clamp(glm::dot(isect_data.normal, ray_dir), 0.0f, 1.0f);
+									
 #ifdef ENABLE_NEE
-						//sample the sun disk in the sky directly with a Next Event Estimator
-						float nee_cosine;
-						float nee_pdf;
-						glm::vec3 nee_ray_dir = SampleSkySun(
-							/*glm::vec2(
-								OwenScrambleFloat(rand_uv.x, lds_scramble_seeds[bounce*2+0]),
-								OwenScrambleFloat(rand_uv.y, lds_scramble_seeds[bounce*2+1])
-							)*/rand_uv,
-							isect_data.normal,
-							sun_transform,
-							nee_cosine,
-							nee_pdf
-						);
-						bool is_light_visible = !TraceScene(ray_orig, nee_ray_dir).hit();
-						//adding bounce!=max_bounces-1 condition makes the image match with the image without NEE,
-						//otherwise NEE is always 1 bounce ahead of the renderer without it, making it impossible to validate
-						if(is_light_visible && nee_cosine > 0 && bounce!=max_bounces-1)
-						{
-							//compute Multiple Importance Sampling weight and add the weighted contribution
-							float nee_mis_weight = BalanceHeuristic(nee_pdf, MapToUnitHemisphereCosineWeightedPDF(nee_cosine));
-							color += nee_mis_weight * throughput * (isect_data.material->albedo/float(PI)) * nee_cosine * calc_sky_color(nee_ray_dir) / nee_pdf;
-						}
+									//sample the sun disk in the sky directly with a Next Event Estimator
+									float nee_cosine;
+									float nee_pdf;
+									glm::vec3 nee_ray_dir = SampleSkySun(
+										//glm::vec2(
+										//	OwenScrambleFloat(rand_uv.x, lds_scramble_seeds[bounce*2+0]),
+										//	OwenScrambleFloat(rand_uv.y, lds_scramble_seeds[bounce*2+1])
+										//)
+										rand_uv,
+										isect_data.normal,
+										sun_transform,
+										nee_cosine,
+										nee_pdf
+									);
+									bool is_light_visible = !TraceScene(ray_orig, nee_ray_dir).hit();
+									//adding bounce!=max_bounces-1 condition makes the image match with the image without NEE,
+									//otherwise NEE is always 1 bounce ahead of the renderer without it, making it impossible to validate
+									if(is_light_visible && nee_cosine > 0 && bounce!=max_bounces-1)
+									{
+										//compute Multiple Importance Sampling weight and add the weighted contribution
+										float nee_mis_weight = BalanceHeuristic(nee_pdf, MapToUnitHemisphereCosineWeightedPDF(nee_cosine));
+										color += nee_mis_weight * throughput * (isect_data.material->albedo/float(PI)) * nee_cosine * calc_sky_color(nee_ray_dir) / nee_pdf;
+									}
 #endif
-						
-						//pretty much all the terms are canceled out by the cosine weighted hemisphere sampling with BRDF=albedo/PI and PDF=cosine/PI,
-						//would have been this otherwise: cosine * BRDF / PDF
-						throughput *= isect_data.material->albedo;
-					}
-					else
-					{
-						//the ray didn't hit any geometry, so fetch the sky color and multiply by the portion of how much light goes to the sensor
+									
+									//pretty much all the terms are canceled out by the cosine weighted hemisphere sampling with BRDF=albedo/PI and PDF=cosine/PI,
+									//would have been this otherwise: cosine * BRDF / PDF
+									throughput *= isect_data.material->albedo;
+								}
+								else
+								{
+									//the ray didn't hit any geometry, so fetch the sky color and multiply by the portion of how much light goes to the sensor
 #ifdef ENABLE_NEE
-						//must not ignore sun for primary rays, hence bounce!=0 check is added
-						float mis_weight = bounce!=0? BalanceHeuristic(MapToUnitHemisphereCosineWeightedPDF(cosine), SampleSkySunPDF(ray_dir)): 1.0f;						
-						color += mis_weight * throughput * calc_sky_color(ray_dir);
+									//must not ignore sun for primary rays, hence bounce!=0 check is added
+									float mis_weight = bounce!=0? BalanceHeuristic(MapToUnitHemisphereCosineWeightedPDF(cosine), SampleSkySunPDF(ray_dir)): 1.0f;
+									color += mis_weight * throughput * calc_sky_color(ray_dir);
 #else
-						color += throughput * calc_sky_color(ray_dir);						
+									color += throughput * calc_sky_color(ray_dir);
 #endif
-						break;
+									break;
+								}
+							}
+							
+							//store new color
+							color_buffer[x+win_resolution.x*y] = glm::vec4(color, 1.0);
+						}
 					}
-				}
-				
-				//store new color
-				color_buffer[x+win_width*y] = glm::vec4(color, 1.0);
+				});
 			}
 		}
+		pool.wait();
+		
 		sample_count += 1.0f;
 		++frame_idx;
 		
 		//write float color buffer to the texture pixels
-		for(int y = 0; y < win_height; ++y)
+		for(int y = 0; y < win_resolution.y; ++y)
 		{
-			for(int x = 0; x < win_width; ++x)
+			for(int x = 0; x < win_resolution.x; ++x)
 			{
-				int i = x+win_width*y;
+				int i = x+win_resolution.x*y;
 				//NOTE the sample count division, doing it here to not involve another intermediate buffer
 				auto color = color_buffer[i] / sample_count;
 				//approximate sRGB transfer
