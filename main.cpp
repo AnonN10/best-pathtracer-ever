@@ -195,7 +195,7 @@ float RLDSComputePhi(glm::uint d_max) {
 	float phi_d = 2.0f;
 	for(int i = 0; i < 15; ++i)
 	{
-		phi_d = glm::pow(1.0f + phi_d, 1.0f/float(phi_d+1));
+		phi_d = glm::pow(0.5f + phi_d, 1.0f/float(d_max+1));
 	}
 	return phi_d;
 }
